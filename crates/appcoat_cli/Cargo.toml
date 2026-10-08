@@ -1,0 +1,12 @@
+[package]
+name = "appcoat_cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "appcoat"
+path = "src/main.rs"
+
+[dependencies]
+appcoat_build.workspace = true

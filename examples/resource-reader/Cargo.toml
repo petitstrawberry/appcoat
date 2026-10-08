@@ -1,0 +1,8 @@
+[package]
+name = "appcoat_resource_reader"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+appcoat_runtime.workspace = true

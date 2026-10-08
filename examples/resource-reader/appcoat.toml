@@ -1,0 +1,14 @@
+[app]
+id = "dev.appcoat.resource-reader"
+slug = "resource-reader"
+name = "Appcoat Resource Reader"
+version = "0.1.0"
+executable = "resource-reader"
+
+[build]
+command = ["sh", "build.sh"]
+artifact = "build/resource-reader"
+
+[[resources]]
+source = "assets/greeting.txt"
+to = "greeting.txt"

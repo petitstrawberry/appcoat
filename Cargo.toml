@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["crates/appcoat_build", "crates/appcoat_runtime", "crates/appcoat_cli", "examples/resource-reader"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+
+[workspace.dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+toml = "0.8.23"
+appcoat_build = { path = "crates/appcoat_build" }
+appcoat_runtime = { path = "crates/appcoat_runtime" }

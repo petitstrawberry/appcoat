@@ -1,0 +1,14 @@
+[app]
+id = "dev.appcoat.scarlet-reader"
+slug = "scarlet-reader"
+name = "Appcoat Scarlet Reader"
+version = "0.1.0"
+executable = "scarlet-reader"
+
+[build]
+command = ["sh", "build.sh"]
+artifact = "build/scarlet-reader"
+
+[[resources]]
+source = "greeting.txt"
+to = "greeting.txt"

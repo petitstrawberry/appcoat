@@ -1,0 +1,14 @@
+[app]
+id = "dev.appcoat.custom-c"
+slug = "custom-c"
+name = "Appcoat C Example"
+version = "0.1.0"
+executable = "custom-c"
+
+[build]
+command = ["sh", "build.sh"]
+artifact = "build/custom-c"
+
+[[resources]]
+source = "assets/greeting.txt"
+to = "greeting.txt"
