@@ -1,4 +1,6 @@
 //! Artifact-first packaging. This crate runs on an upstream Rust host for every target.
+mod macos;
+
 use serde::{Deserialize, Serialize};
 use std::{
     env, fs,
@@ -52,7 +54,48 @@ pub struct Definition {
     pub app: Metadata,
     pub build: Option<BuildCommand>,
     #[serde(default)]
+    pub icons: Icons,
+    #[serde(default)]
+    pub desktop: Desktop,
+    #[serde(default)]
+    pub macos: Macos,
+    #[serde(default)]
     pub resources: Vec<Resource>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Macos {
+    pub bundle_libraries: bool,
+    pub system_libraries: std::collections::BTreeMap<String, String>,
+}
+
+/// Manifest-relative, pre-rendered native icons. Appcoat does not run image tools.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Icons {
+    pub macos: Option<PathBuf>,
+    pub linux: Option<PathBuf>,
+    pub scarlet: Option<PathBuf>,
+}
+impl Icons {
+    fn for_platform(&self, platform: Platform) -> Option<&Path> {
+        match platform {
+            Platform::Macos => self.macos.as_deref(),
+            Platform::Linux => self.linux.as_deref(),
+            Platform::Scarlet => self.scarlet.as_deref(),
+        }
+    }
+}
+
+/// Desktop-entry integration. macOS document events require a separate OS adapter.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Desktop {
+    pub open_file: bool,
+    pub new_instance: bool,
+    pub mime_types: Vec<String>,
+    pub categories: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -127,6 +170,46 @@ pub fn read_definition(manifest: &Path) -> Result<Definition> {
     }
     for resource in &definition.resources {
         relative(&resource.to)?;
+    }
+    if !definition.macos.system_libraries.is_empty() && !definition.macos.bundle_libraries {
+        return Err(error("macos.system-libraries requires bundle-libraries"));
+    }
+    for (name, path) in &definition.macos.system_libraries {
+        if !token(name)
+            || !name.ends_with(".dylib")
+            || !macos::system_library(path)
+            || !Path::new(path).components().all(|c| {
+                matches!(
+                    c,
+                    std::path::Component::RootDir | std::path::Component::Normal(_)
+                )
+            })
+        {
+            return Err(error(
+                "system-libraries must map dylib filenames to absolute OS library paths",
+            ));
+        }
+    }
+    for mime in &definition.desktop.mime_types {
+        let Some((kind, subtype)) = mime.split_once('/') else {
+            return Err(error("desktop.mime-types must contain type/subtype"));
+        };
+        if ![kind, subtype].iter().all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"!#$&^_.+-".contains(&b))
+        }) {
+            return Err(error("invalid desktop MIME type"));
+        }
+    }
+    if definition
+        .desktop
+        .categories
+        .iter()
+        .any(|category| !token(category))
+    {
+        return Err(error("invalid desktop category"));
     }
     Ok(definition)
 }
@@ -238,6 +321,10 @@ pub fn package(options: PackageOptions<'_>) -> Result<PathBuf> {
     if fs::symlink_metadata(options.output).is_ok() {
         return Err(error("output already exists; choose a new destination"));
     }
+    // Validate the selected icon before executing any consumer build command.
+    if let Some(icon) = definition.icons.for_platform(options.platform) {
+        validate_icon(&resolve_resource(root, icon)?, options.platform)?;
+    }
     // Check declared resource containment before allowing a consumer command to run.
     for resource in &definition.resources {
         resolve_resource(root, &resource.source)?;
@@ -343,7 +430,7 @@ fn assemble(
         Platform::Macos => (
             PathBuf::from("Contents/MacOS").join(&app.executable),
             PathBuf::from("Contents/Resources"),
-            PathBuf::from("Contents/appcoat-package.toml"),
+            PathBuf::from("Contents/Resources/appcoat-package.toml"),
         ),
         Platform::Linux => (
             PathBuf::from("bin").join(&app.executable),
@@ -366,6 +453,25 @@ fn assemble(
             &stage.join(&resources).join(relative(&resource.to)?),
         )?;
     }
+    let icon_name = if let Some(icon) = definition.icons.for_platform(platform) {
+        let extension = if platform == Platform::Macos {
+            "icns"
+        } else {
+            "png"
+        };
+        let name = format!("{}.{}", app.id, extension);
+        let destination = if platform == Platform::Linux {
+            PathBuf::from("share/pixmaps").join(&name)
+        } else {
+            resources.join(&name)
+        };
+        let source = resolve_resource(root, icon)?;
+        validate_icon(&source, platform)?;
+        copy_tree(&source, &stage.join(&destination))?;
+        Some(name)
+    } else {
+        None
+    };
     match platform {
         Platform::Macos => {
             let xml = |value: &str| {
@@ -393,6 +499,13 @@ fn assemble(
                     xml(value)
                 ));
             }
+            plist.push_str("<key>NSHighResolutionCapable</key><true/>\n");
+            if let Some(icon) = &icon_name {
+                plist.push_str(&format!(
+                    "<key>CFBundleIconFile</key><string>{}</string>\n",
+                    xml(icon)
+                ));
+            }
             plist.push_str("</dict></plist>\n");
             fs::write(stage.join("Contents/Info.plist"), plist)?;
         }
@@ -406,9 +519,29 @@ fn assemble(
                     app.executable.clone()
                 }
             );
+            if definition.desktop.open_file {
+                desktop = desktop.replace("\nTerminal=", " %f\nTerminal=");
+            }
+            if let Some(icon) = &icon_name {
+                let icon = if platform == Platform::Scarlet {
+                    format!("resources/{icon}")
+                } else {
+                    app.id.clone()
+                };
+                desktop.push_str(&format!("Icon={icon}\n"));
+            }
+            for (key, values) in [
+                ("MimeType", &definition.desktop.mime_types),
+                ("Categories", &definition.desktop.categories),
+            ] {
+                if !values.is_empty() {
+                    desktop.push_str(&format!("{key}={};\n", values.join(";")));
+                }
+            }
             let path = if platform == Platform::Scarlet {
                 desktop.push_str(&format!(
-                    "X-Scarlet-NewInstance=false\nX-Scarlet-AppFormat=1\nX-Scarlet-Target={}\n",
+                    "X-Scarlet-NewInstance={}\nX-Scarlet-AppFormat=1\nX-Scarlet-Target={}\n",
+                    definition.desktop.new_instance,
                     target.unwrap()
                 ));
                 PathBuf::from(format!("{}.desktop", app.id))
@@ -427,9 +560,45 @@ fn assemble(
         executable,
         resources,
     };
-    fs::write(stage.join(receipt), toml::to_string(&package)?)?;
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(stage.join(receipt))?
+        .write_all(toml::to_string(&package)?.as_bytes())?;
     if platform == Platform::Scarlet {
         validate_scarlet_tree(stage, target.unwrap())?;
+    }
+    if platform == Platform::Macos && definition.macos.bundle_libraries {
+        macos::bundle(
+            stage,
+            artifact,
+            &package.executable,
+            &definition.macos.system_libraries,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_icon(path: &Path, platform: Platform) -> Result<()> {
+    if !path.is_file() {
+        return Err(error("icon must be a file"));
+    }
+    let data = fs::read(path)?;
+    let valid = if platform == Platform::Macos {
+        data.len() >= 8
+            && data.starts_with(b"icns")
+            && u32::from_be_bytes(data[4..8].try_into()?) as usize == data.len()
+    } else {
+        data.len() >= 24
+            && data.starts_with(b"\x89PNG\r\n\x1a\n")
+            && &data[12..16] == b"IHDR"
+            && u32::from_be_bytes(data[16..20].try_into()?) > 0
+            && u32::from_be_bytes(data[20..24].try_into()?) > 0
+    };
+    if !valid {
+        return Err(error(
+            "expected an ICNS icon for macOS or a PNG icon for Linux/Scarlet",
+        ));
     }
     Ok(())
 }
@@ -580,8 +749,11 @@ fn validate_scarlet_tree(root: &Path, target: &str) -> Result<()> {
 
 pub fn inspect(package_root: &Path) -> Result<(PathBuf, Package)> {
     let root = package_root.canonicalize()?;
-    let receipt = if root.join("Contents/appcoat-package.toml").is_file() {
-        root.join("Contents/appcoat-package.toml")
+    let receipt = if root
+        .join("Contents/Resources/appcoat-package.toml")
+        .is_file()
+    {
+        root.join("Contents/Resources/appcoat-package.toml")
     } else {
         root.join("appcoat-package.toml")
     };

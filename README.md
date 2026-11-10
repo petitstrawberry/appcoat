@@ -90,11 +90,41 @@ Output layouts:
 | Scarlet | `bin/<executable>` | `resources` | Root `<id>.desktop` with native target fields |
 
 A versioned relative-path receipt records the runtime layout. The macOS receipt
-is `Contents/appcoat-package.toml`; other receipts are at the package root.
+is `Contents/Resources/appcoat-package.toml`; other receipts are at the package root.
 Linux output is currently a dedicated application install prefix, not a merger
 into `/usr` shared by many appcoat packages. Desktop launch needs its `bin` on
-PATH. Icons, MIME associations, extra executable payloads and shared-prefix
-installation policies are later schema work.
+PATH, with its `share` directory on `XDG_DATA_DIRS` for desktop entries and icons.
+Extra executable payloads and shared-prefix installation policies are deferred.
+
+### Application icons and desktop entries
+
+```toml
+[icons]
+macos = "assets/player.icns"
+linux = "assets/player.png"
+scarlet = "assets/player.png"
+
+[desktop]
+open-file = true
+new-instance = true
+mime-types = ["text/plain"]
+categories = ["Development", "TextEditor"]
+```
+
+All fields are optional. Icon paths are relative to the manifest, obey resource
+containment rules, and must already exist before `--build`. Only the selected
+platform's icon is required. Supply ICNS on macOS and PNG on Linux/Scarlet;
+Appcoat checks headers, not a complete image decode, and does not convert images.
+macOS bundles declare `CFBundleIconFile` and enable high-resolution rendering.
+Linux installs the icon under `share/pixmaps/<app-id>.png`; Scarlet places it in
+`resources`. Icons cannot overwrite declared resources.
+
+`desktop` applies to Linux and Scarlet. `open-file` adds `%f` to `Exec`, so the
+application must handle a file path argument. `new-instance` sets Scarlet's
+launcher policy. MIME types and categories are emitted into the desktop entry;
+Appcoat does not register them as system defaults or update desktop caches.
+macOS file associations are not emitted: handling native document-open events
+requires application/framework support beyond command-line arguments.
 
 macOS accepts Mach-O files or executable shebang scripts; Linux accepts ELF or
 executable shebang scripts. These are format checks, not architecture, linkage
@@ -102,8 +132,43 @@ or deployment compatibility audits. Scarlet checks ELF64, native OSABI, selected
 architecture, executable permissions and `/bin/scarlet-ld` for a dynamic
 interpreter; all ELF resources must have the same ABI. Its package contains
 exactly one root desktop descriptor and no build recipes. The first version
-does not discover or bundle dependent libraries. User data and OS libraries or
+does not bundle dependent libraries unless the macOS option below is enabled. User data and OS libraries or
 GPU drivers are not ordinary app resources.
+
+### macOS dynamic libraries
+
+```toml
+[macos]
+bundle-libraries = true
+```
+
+On a macOS packaging host, this copies non-system dylibs and their transitive
+dependencies into `Contents/Frameworks`, rewrites their load commands to bundle
+relative paths, and ad-hoc signs and verifies the finished app. This removes
+absolute build-machine paths such as Nix store references. The original executable
+and libraries are not changed. `/usr/lib` and `/System/Library` dependencies stay
+provided by the OS. Apple's `otool`, `install_name_tool`, and `codesign` are required.
+
+This option accepts thin Mach-O binaries with absolute, `@loader_path`, or
+`@executable_path` dependencies. Unresolved `@rpath` dependencies, external
+frameworks, and conflicting library filenames fail without publishing a package.
+Resolve those in the consumer build first. Include redistribution licenses for
+bundled libraries in the application's resources. Ad-hoc signing is for local use;
+Developer ID signing and notarization remain separate release steps.
+
+An application may explicitly substitute an ABI-compatible OS library:
+
+```toml
+[macos.system-libraries]
+"libiconv.2.dylib" = "/usr/lib/libiconv.2.dylib"
+```
+
+These filename mappings are applied before copying dependencies. Appcoat does
+not infer ABI compatibility; the consumer must verify it. This is useful when a
+build toolchain links a private copy of a library already supplied by macOS.
+Libraries may also require data files or plugins: dylib closure alone does not
+relocate those resources.
+
 
 ## Optional runtime
 

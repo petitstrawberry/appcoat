@@ -77,3 +77,29 @@ The C example currently needs `appcoat run` or an explicit root. The Scarlet
 example defaults to its documented `/applications/scarlet-reader.app/resources`
 deployment path until an OS launcher supplies a root. These are explicit example
 policies rather than an implemented cross-platform launcher integration.
+
+## GUI packaging metadata — 2026-11-10
+
+On Apple Silicon macOS, `./scripts/check` passed after adding native icons and
+Linux/Scarlet desktop metadata: 12 Rust tests, 5 process-level integration tests,
+formatting and clippy. New cases cover each platform's icon location and metadata,
+optional platform inputs, MIME/category validation, containment, symlinks and
+resource collisions. Image validation checks headers only; tests use minimal
+headers for these unit cases. Real Kureha ICNS/PNG assets are exercised by the
+Kureha integration. Native macOS document-open events remain outside this change.
+
+
+## macOS library relocation — 2026-11-10
+
+`./scripts/check` passes 15 Rust tests and 7 integration tests on Apple Silicon.
+A native C executable and a two-library dependency chain are packaged and signed,
+then launched successfully after relocation and deletion of the original build
+files. Unresolved `@rpath` dependencies fail without publishing or leaving
+staging. Receipt collisions and invalid system-library substitutions are rejected.
+
+The macOS receipt now lives in `Contents/Resources/appcoat-package.toml`, so
+codesign treats it as data. Both the build and runtime libraries use the new path.
+Native library closure is opt-in and requires Apple's host tools. It supports
+thin binaries and dylibs; frameworks and unresolved rpaths are rejected. Explicit
+system-library mappings are consumer-owned ABI decisions. Data files loaded by
+libraries are outside dylib dependency discovery.

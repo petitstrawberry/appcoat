@@ -63,7 +63,7 @@ impl Resources {
                 .ok_or_else(|| invalid("missing Contents directory"))?;
             if directory.file_name() != Some(std::ffi::OsStr::new("MacOS"))
                 || contents.file_name() != Some(std::ffi::OsStr::new("Contents"))
-                || !contents.join("appcoat-package.toml").is_file()
+                || !contents.join("Resources/appcoat-package.toml").is_file()
             {
                 return Err(invalid(
                     "executable is not in an appcoat macOS bundle; supply an explicit root",
