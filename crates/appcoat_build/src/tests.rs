@@ -262,3 +262,109 @@ fn staging_cannot_recurse_into_its_resource_source() {
     );
     assert!(!fixture.0.join("assets/recursive.app").exists());
 }
+
+#[test]
+fn native_icons_and_desktop_metadata_are_packaged() {
+    let fixture = Fixture::new();
+    let mut icns = b"icns".to_vec();
+    icns.extend_from_slice(&8u32.to_be_bytes());
+    fs::write(fixture.0.join("icon.icns"), &icns).unwrap();
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend_from_slice(&13u32.to_be_bytes());
+    png.extend_from_slice(b"IHDR");
+    png.extend_from_slice(&512u32.to_be_bytes());
+    png.extend_from_slice(&512u32.to_be_bytes());
+    fs::write(fixture.0.join("icon.png"), &png).unwrap();
+    fixture.replace("[build]", "[icons]\nmacos='icon.icns'\nlinux='icon.png'\nscarlet='icon.png'\n[desktop]\nopen-file=true\nnew-instance=true\nmime-types=['text/plain','text/x-c++src']\ncategories=['Development','TextEditor']\n[build]");
+    let mac = fixture.pack(Platform::Macos, None, "reader.app").unwrap();
+    let plist = fs::read_to_string(mac.join("Contents/Info.plist")).unwrap();
+    assert!(plist.contains("<key>CFBundleIconFile</key><string>dev.example.reader.icns</string>"));
+    assert!(plist.contains("<key>NSHighResolutionCapable</key><true/>"));
+    assert!(!plist.contains("CFBundleDocumentTypes"));
+    assert_eq!(
+        fs::read(mac.join("Contents/Resources/dev.example.reader.icns")).unwrap(),
+        icns
+    );
+    let linux = fixture.pack(Platform::Linux, None, "linux").unwrap();
+    let desktop =
+        fs::read_to_string(linux.join("share/applications/dev.example.reader.desktop")).unwrap();
+    assert!(desktop.contains("Exec=reader %f\n"));
+    assert!(desktop.contains("Icon=dev.example.reader\n"));
+    assert!(desktop.contains("MimeType=text/plain;text/x-c++src;\n"));
+    assert!(desktop.contains("Categories=Development;TextEditor;\n"));
+    assert_eq!(
+        fs::read(linux.join("share/pixmaps/dev.example.reader.png")).unwrap(),
+        png
+    );
+    fixture.elf(183);
+    let scarlet = fixture
+        .pack(
+            Platform::Scarlet,
+            Some("aarch64-unknown-scarlet"),
+            "scarlet/reader.app",
+        )
+        .unwrap();
+    let desktop = fs::read_to_string(scarlet.join("dev.example.reader.desktop")).unwrap();
+    assert!(desktop.contains("Exec=bin/reader %f\n"));
+    assert!(desktop.contains("Icon=resources/dev.example.reader.png\n"));
+    assert!(desktop.contains("X-Scarlet-NewInstance=true\n"));
+    assert_eq!(
+        fs::read(scarlet.join("resources/dev.example.reader.png")).unwrap(),
+        png
+    );
+}
+
+#[test]
+fn invalid_icons_and_desktop_values_do_not_publish_or_run_build() {
+    let fixture = Fixture::new();
+    fixture.replace(
+        "[build]",
+        "[icons]\nmacos='../escape.icns'\n[build]\ncommand=['sh','-c','touch build-ran']",
+    );
+    assert!(
+        package(PackageOptions {
+            manifest: &fixture.0.join("appcoat.toml"),
+            platform: Platform::Macos,
+            target: None,
+            artifact: None,
+            output: &fixture.0.join("bad.app"),
+            build: true,
+        })
+        .is_err()
+    );
+    assert!(!fixture.0.join("build-ran").exists());
+    fixture.replace("../escape.icns", "greeting.txt");
+    assert!(fixture.pack(Platform::Macos, None, "bad.app").is_err());
+    assert!(!fixture.0.join("bad.app").exists());
+    // Unselected platform icons need not exist when packaging another platform.
+    fixture.replace("greeting.txt'\n[build]", "missing.icns'\n[build]");
+    assert!(fixture.pack(Platform::Linux, None, "linux").is_ok());
+    fixture.replace(
+        "[icons]",
+        "[desktop]\nmime-types=['text/plain;Injected=true']\n[icons]",
+    );
+    assert!(fixture.pack(Platform::Linux, None, "bad-linux").is_err());
+    fixture.replace(
+        "mime-types=['text/plain;Injected=true']",
+        "categories=['Editor;Injected']",
+    );
+    assert!(fixture.pack(Platform::Linux, None, "bad-linux").is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn icon_symlinks_and_resource_collisions_are_rejected() {
+    let fixture = Fixture::new();
+    fs::write(fixture.0.join("icon.icns"), b"icns\0\0\0\x08").unwrap();
+    std::os::unix::fs::symlink("icon.icns", fixture.0.join("link.icns")).unwrap();
+    fixture.replace("[build]", "[icons]\nmacos='link.icns'\n[build]");
+    assert!(fixture.pack(Platform::Macos, None, "link.app").is_err());
+    fixture.replace("macos='link.icns'", "macos='icon.icns'");
+    fixture.replace("to='greeting.txt'", "to='dev.example.reader.icns'");
+    assert!(
+        fixture
+            .pack(Platform::Macos, None, "collision.app")
+            .is_err()
+    );
+    assert!(!fixture.0.join("collision.app").exists());
+}

@@ -77,3 +77,13 @@ The C example currently needs `appcoat run` or an explicit root. The Scarlet
 example defaults to its documented `/applications/scarlet-reader.app/resources`
 deployment path until an OS launcher supplies a root. These are explicit example
 policies rather than an implemented cross-platform launcher integration.
+
+## GUI packaging metadata — 2026-11-10
+
+On Apple Silicon macOS, `./scripts/check` passed after adding native icons and
+Linux/Scarlet desktop metadata: 12 Rust tests, 5 process-level integration tests,
+formatting and clippy. New cases cover each platform's icon location and metadata,
+optional platform inputs, MIME/category validation, containment, symlinks and
+resource collisions. Image validation checks headers only; tests use minimal
+headers for these unit cases. Real Kureha ICNS/PNG assets are exercised by the
+Kureha integration. Native macOS document-open events remain outside this change.

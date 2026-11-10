@@ -93,8 +93,38 @@ A versioned relative-path receipt records the runtime layout. The macOS receipt
 is `Contents/appcoat-package.toml`; other receipts are at the package root.
 Linux output is currently a dedicated application install prefix, not a merger
 into `/usr` shared by many appcoat packages. Desktop launch needs its `bin` on
-PATH. Icons, MIME associations, extra executable payloads and shared-prefix
-installation policies are later schema work.
+PATH, with its `share` directory on `XDG_DATA_DIRS` for desktop entries and icons.
+Extra executable payloads and shared-prefix installation policies are deferred.
+
+### Application icons and desktop entries
+
+```toml
+[icons]
+macos = "assets/player.icns"
+linux = "assets/player.png"
+scarlet = "assets/player.png"
+
+[desktop]
+open-file = true
+new-instance = true
+mime-types = ["text/plain"]
+categories = ["Development", "TextEditor"]
+```
+
+All fields are optional. Icon paths are relative to the manifest, obey resource
+containment rules, and must already exist before `--build`. Only the selected
+platform's icon is required. Supply ICNS on macOS and PNG on Linux/Scarlet;
+Appcoat checks headers, not a complete image decode, and does not convert images.
+macOS bundles declare `CFBundleIconFile` and enable high-resolution rendering.
+Linux installs the icon under `share/pixmaps/<app-id>.png`; Scarlet places it in
+`resources`. Icons cannot overwrite declared resources.
+
+`desktop` applies to Linux and Scarlet. `open-file` adds `%f` to `Exec`, so the
+application must handle a file path argument. `new-instance` sets Scarlet's
+launcher policy. MIME types and categories are emitted into the desktop entry;
+Appcoat does not register them as system defaults or update desktop caches.
+macOS file associations are not emitted: handling native document-open events
+requires application/framework support beyond command-line arguments.
 
 macOS accepts Mach-O files or executable shebang scripts; Linux accepts ELF or
 executable shebang scripts. These are format checks, not architecture, linkage
