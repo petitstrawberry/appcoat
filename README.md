@@ -291,17 +291,3 @@ cargo scarlet app build --source dist/scarlet-reader.app \
 An existing Scarlet image can use its `kind = "app"` layer with this prebuilt
 directory. No SDK source changes or additional compiler dependency are needed in
 appcoat. Image construction, boot and Scarlet runtime behavior are not tested here.
-
-## Verification
-
-The Mac prototype was checked with upstream Rust 1.95.0, Rust unit tests,
-`tests/vertical_slice.py`, and Nix-built Rust/C packages. End-to-end tests cover
-direct native resource discovery, relocation, unrelated cwd, argument forwarding,
-custom Cargo output, non-Cargo builds, opt-in build execution, no-clobber behavior,
-and exit-status forwarding. Both AArch64 and RISC-V64 Scarlet examples were
-cross-built and their packaged artifacts accepted by the local SDK's prebuilt-app
-validator. [VERIFICATION.md](VERIFICATION.md) records the exact scope and evidence.
-
-Linux execution, GUI/Finder integration, cross-architecture macOS support,
-dependency closure, signing/notarization, release distribution, and a general
-GUI/event abstraction remain outside this prototype.
