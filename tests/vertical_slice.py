@@ -99,6 +99,55 @@ artifact="program"
         self.assertFalse((definition / "build-ran").exists())
         self.assertTrue(package.exists())
 
+    @unittest.skipUnless(sys.platform == "darwin", "requires macOS native packaging tools")
+    def test_macos_library_closure_survives_removing_original_libraries(self):
+        build = self.root / "original libraries"
+        build.mkdir()
+        (build / "one.c").write_text("int one(void) { return 41; }\n")
+        (build / "two.c").write_text("extern int one(void); int two(void) { return one() + 1; }\n")
+        (build / "main.c").write_text('#include <stdio.h>\nextern int two(void); int main(void) { printf("%d\\n", two()); }\n')
+        one, two, main = (build / name for name in ("libone.dylib", "libtwo.dylib", "app"))
+        for command in [
+            ["/usr/bin/cc", "-dynamiclib", str(build / "one.c"), "-o", str(one), "-Wl,-install_name," + str(one)],
+            ["/usr/bin/cc", "-dynamiclib", str(build / "two.c"), str(one), "-o", str(two), "-Wl,-install_name," + str(two)],
+            ["/usr/bin/cc", str(build / "main.c"), str(two), "-o", str(main)],
+        ]:
+            subprocess.run([*command, "-Wl,-headerpad_max_install_names"], check=True, capture_output=True)
+        manifest = self.root / "native.toml"
+        manifest.write_text('[app]\nid="dev.test.native"\nslug="native"\nname="Native"\nversion="1.0.0"\nexecutable="native"\n[macos]\nbundle-libraries=true\n')
+        app = self.root / "Native.app"
+        self.call("package", "--manifest", manifest, "--platform", "macos", "--artifact", main, "--output", app)
+        moved = self.root / "Moved Native.app"
+        app.rename(moved)
+        shutil.rmtree(build)
+        self.assertEqual(self.call("run", "--package", moved).stdout, "42\n")
+        subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(moved)], check=True, capture_output=True)
+        for name in ("libone.dylib", "libtwo.dylib"):
+            library = moved / "Contents/Frameworks" / name
+            self.assertTrue(library.is_file())
+            report = subprocess.run(["/usr/bin/otool", "-L", str(library)], check=True, capture_output=True, text=True).stdout
+            self.assertNotIn(str(build), report)
+
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires macOS native packaging tools")
+    def test_unresolved_macos_rpath_does_not_publish_or_leave_staging(self):
+        source = self.root / "rpath.c"
+        source.write_text("int answer(void) { return 42; }\n")
+        library = self.root / "librpath.dylib"
+        subprocess.run(["/usr/bin/cc", "-dynamiclib", str(source), "-o", str(library),
+                        "-Wl,-install_name,@rpath/librpath.dylib"], check=True, capture_output=True)
+        source.write_text("extern int answer(void); int main(void) { return answer(); }\n")
+        main = self.root / "rpath-app"
+        subprocess.run(["/usr/bin/cc", str(source), str(library), "-o", str(main)], check=True, capture_output=True)
+        manifest = self.root / "rpath.toml"
+        manifest.write_text('[app]\nid="dev.test.rpath"\nslug="rpath"\nname="Rpath"\nversion="1.0.0"\nexecutable="rpath"\n[macos]\nbundle-libraries=true\n')
+        output = self.root / "Rpath.app"
+        result = self.call("package", "--manifest", manifest, "--platform", "macos", "--artifact", main,
+                          "--output", output, good=False)
+        self.assertIn("resolve @rpath", result.stderr)
+        self.assertFalse(output.exists())
+        self.assertEqual(list(self.root.glob(".appcoat-stage-*")), [])
+
     def test_bad_cli_and_cross_platform_artifact_do_not_publish(self):
         self.call("package", "--typo", "x", good=False)
         self.call("resource-root", "--package", self.root, "--unknown", "x", good=False)

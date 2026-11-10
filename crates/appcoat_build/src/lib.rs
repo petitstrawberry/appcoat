@@ -1,4 +1,6 @@
 //! Artifact-first packaging. This crate runs on an upstream Rust host for every target.
+mod macos;
+
 use serde::{Deserialize, Serialize};
 use std::{
     env, fs,
@@ -56,7 +58,16 @@ pub struct Definition {
     #[serde(default)]
     pub desktop: Desktop,
     #[serde(default)]
+    pub macos: Macos,
+    #[serde(default)]
     pub resources: Vec<Resource>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Macos {
+    pub bundle_libraries: bool,
+    pub system_libraries: std::collections::BTreeMap<String, String>,
 }
 
 /// Manifest-relative, pre-rendered native icons. Appcoat does not run image tools.
@@ -159,6 +170,25 @@ pub fn read_definition(manifest: &Path) -> Result<Definition> {
     }
     for resource in &definition.resources {
         relative(&resource.to)?;
+    }
+    if !definition.macos.system_libraries.is_empty() && !definition.macos.bundle_libraries {
+        return Err(error("macos.system-libraries requires bundle-libraries"));
+    }
+    for (name, path) in &definition.macos.system_libraries {
+        if !token(name)
+            || !name.ends_with(".dylib")
+            || !macos::system_library(path)
+            || !Path::new(path).components().all(|c| {
+                matches!(
+                    c,
+                    std::path::Component::RootDir | std::path::Component::Normal(_)
+                )
+            })
+        {
+            return Err(error(
+                "system-libraries must map dylib filenames to absolute OS library paths",
+            ));
+        }
     }
     for mime in &definition.desktop.mime_types {
         let Some((kind, subtype)) = mime.split_once('/') else {
@@ -400,7 +430,7 @@ fn assemble(
         Platform::Macos => (
             PathBuf::from("Contents/MacOS").join(&app.executable),
             PathBuf::from("Contents/Resources"),
-            PathBuf::from("Contents/appcoat-package.toml"),
+            PathBuf::from("Contents/Resources/appcoat-package.toml"),
         ),
         Platform::Linux => (
             PathBuf::from("bin").join(&app.executable),
@@ -530,9 +560,21 @@ fn assemble(
         executable,
         resources,
     };
-    fs::write(stage.join(receipt), toml::to_string(&package)?)?;
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(stage.join(receipt))?
+        .write_all(toml::to_string(&package)?.as_bytes())?;
     if platform == Platform::Scarlet {
         validate_scarlet_tree(stage, target.unwrap())?;
+    }
+    if platform == Platform::Macos && definition.macos.bundle_libraries {
+        macos::bundle(
+            stage,
+            artifact,
+            &package.executable,
+            &definition.macos.system_libraries,
+        )?;
     }
     Ok(())
 }
@@ -707,8 +749,11 @@ fn validate_scarlet_tree(root: &Path, target: &str) -> Result<()> {
 
 pub fn inspect(package_root: &Path) -> Result<(PathBuf, Package)> {
     let root = package_root.canonicalize()?;
-    let receipt = if root.join("Contents/appcoat-package.toml").is_file() {
-        root.join("Contents/appcoat-package.toml")
+    let receipt = if root
+        .join("Contents/Resources/appcoat-package.toml")
+        .is_file()
+    {
+        root.join("Contents/Resources/appcoat-package.toml")
     } else {
         root.join("appcoat-package.toml")
     };

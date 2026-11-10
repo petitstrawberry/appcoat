@@ -217,7 +217,7 @@ fn scarlet_interpreter_ranges_cannot_panic_or_use_linux_loader() {
 fn receipt_escape_and_cross_platform_launch_are_rejected() {
     let fixture = Fixture::new();
     let app = fixture.pack(Platform::Macos, None, "reader.app").unwrap();
-    let receipt = app.join("Contents/appcoat-package.toml");
+    let receipt = app.join("Contents/Resources/appcoat-package.toml");
     fs::write(
         &receipt,
         fs::read_to_string(&receipt)
@@ -367,4 +367,32 @@ fn icon_symlinks_and_resource_collisions_are_rejected() {
             .is_err()
     );
     assert!(!fixture.0.join("collision.app").exists());
+}
+
+#[test]
+fn resources_cannot_overwrite_the_macos_package_receipt() {
+    let fixture = Fixture::new();
+    fixture.replace("to='greeting.txt'", "to='appcoat-package.toml'");
+    assert!(fixture.pack(Platform::Macos, None, "bad.app").is_err());
+    assert!(!fixture.0.join("bad.app").exists());
+}
+
+#[test]
+fn system_library_substitutions_are_explicit_and_cannot_escape_os_paths() {
+    let fixture = Fixture::new();
+    fixture.replace("[build]", "[macos]\nbundle-libraries=true\n[macos.system-libraries]\n'libiconv.2.dylib'='/usr/lib/libiconv.2.dylib'\n[build]");
+    assert!(read_definition(&fixture.0.join("appcoat.toml")).is_ok());
+    fixture.replace(
+        "/usr/lib/libiconv.2.dylib",
+        "/usr/lib/../../tmp/libiconv.2.dylib",
+    );
+    assert!(read_definition(&fixture.0.join("appcoat.toml")).is_err());
+    fixture.replace(
+        "/usr/lib/../../tmp/libiconv.2.dylib",
+        "/tmp/libiconv.2.dylib",
+    );
+    assert!(read_definition(&fixture.0.join("appcoat.toml")).is_err());
+    fixture.replace("/tmp/libiconv.2.dylib", "/usr/lib/libiconv.2.dylib");
+    fixture.replace("bundle-libraries=true", "bundle-libraries=false");
+    assert!(read_definition(&fixture.0.join("appcoat.toml")).is_err());
 }

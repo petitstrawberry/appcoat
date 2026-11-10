@@ -87,3 +87,19 @@ optional platform inputs, MIME/category validation, containment, symlinks and
 resource collisions. Image validation checks headers only; tests use minimal
 headers for these unit cases. Real Kureha ICNS/PNG assets are exercised by the
 Kureha integration. Native macOS document-open events remain outside this change.
+
+
+## macOS library relocation — 2026-11-10
+
+`./scripts/check` passes 15 Rust tests and 7 integration tests on Apple Silicon.
+A native C executable and a two-library dependency chain are packaged and signed,
+then launched successfully after relocation and deletion of the original build
+files. Unresolved `@rpath` dependencies fail without publishing or leaving
+staging. Receipt collisions and invalid system-library substitutions are rejected.
+
+The macOS receipt now lives in `Contents/Resources/appcoat-package.toml`, so
+codesign treats it as data. Both the build and runtime libraries use the new path.
+Native library closure is opt-in and requires Apple's host tools. It supports
+thin binaries and dylibs; frameworks and unresolved rpaths are rejected. Explicit
+system-library mappings are consumer-owned ABI decisions. Data files loaded by
+libraries are outside dylib dependency discovery.
